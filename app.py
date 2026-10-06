@@ -48,7 +48,22 @@ fallback_models = [
     m.strip() for m in os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.1-flash-lite").split(",") if m.strip()
 ]
 models = [model, *fallback_models]
-api_key = os.getenv("GEMINI_API_KEY", "").strip()
+api_key = os.getenv("GEMINI_API_KEY", "").strip().strip("\"'")
+
+
+def show_api_error(e: errors.APIError) -> None:
+    if "API key not valid" in (e.message or "") or e.code in (401, 403):
+        masked = f"{api_key[:4]}...{api_key[-4:]} ({len(api_key)} chars)" if len(api_key) > 8 else "(empty/too short)"
+        st.error(
+            f"Gemini rejected the API key `{masked}`. Check GEMINI_API_KEY in your .env file "
+            "(or in Streamlit Cloud: App settings -> Secrets), then restart the app."
+        )
+    elif e.code == 429:
+        st.error("Gemini quota or rate limit reached. Please wait a moment and try again.")
+    elif e.code == 503:
+        st.error("Gemini is busy right now (high demand). Please try again in a moment.")
+    else:
+        st.error(f"Gemini error: {e.message or e}")
 
 with st.sidebar:
     st.header("📘 Manual")
@@ -80,7 +95,7 @@ try:
     with st.spinner("Indexing the manual (one-time, may take several minutes on the free tier)..."):
         index = index_for(api_key)
 except errors.APIError as e:
-    st.error(f"Could not index the manual with Gemini: {e.message or e}")
+    show_api_error(e)
     st.stop()
 except httpx.TimeoutException:
     st.error("Timed out indexing the manual. Please refresh to try again.")
@@ -106,12 +121,7 @@ if question := st.chat_input("Ask a question about the manual..."):
                 ask(client_for(api_key), models, index, st.session_state.messages, question)
             )
         except errors.APIError as e:
-            if e.code == 429:
-                st.error("Gemini quota or rate limit reached. Please wait a moment and try again.")
-            elif e.code == 503:
-                st.error("Gemini is busy right now (high demand). Please try again in a moment.")
-            else:
-                st.error(f"Gemini error: {e.message or e}")
+            show_api_error(e)
             st.stop()
         except httpx.TimeoutException:
             st.error("Gemini took too long to respond. Please try again.")
