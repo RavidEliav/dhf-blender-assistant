@@ -45,7 +45,7 @@ def index_for(api_key: str):
 
 model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 fallback_models = [
-    m.strip() for m in os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.7-flash,gemini-flash-latest").split(",") if m.strip()
+    m.strip() for m in os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.7-flash,gemini-3.6-flash").split(",") if m.strip()
 ]
 models = [model, *fallback_models]
 api_key = os.getenv("GEMINI_API_KEY", "").strip()

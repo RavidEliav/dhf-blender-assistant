@@ -1,6 +1,9 @@
 import hashlib
+import math
+import re
 import time
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
@@ -18,7 +21,12 @@ EMBED_MODEL = "gemini-embedding-001"
 EMBED_DIM = 768
 EMBED_BATCH = 20
 MAX_PAGE_CHARS = 8000
-TOP_K = 8
+TOP_K = 12
+
+_WORD = re.compile(r"[a-z0-9]+")
+_STOP = set(
+    "a an and are as at be by can do does for from how i in is it its my of on or the this to what when where which who why with you your".split()
+)
 
 SYSTEM_PROMPT = """You are a helpful support assistant for the DHF Inline Blender, an industrial chemical blending system. \
 Each question comes with excerpts from the official DHF Blender manual, each marked [Page N]. These excerpts are your ONLY source of truth.
@@ -43,10 +51,33 @@ def get_client(api_key: str) -> genai.Client:
     )
 
 
+def _tokens(text: str) -> list[str]:
+    # Crude plural stemming so "daytanks" matches "daytank".
+    return [w[:-1] if len(w) > 4 and w.endswith("s") else w for w in _WORD.findall(text.lower()) if w not in _STOP]
+
+
 @dataclass
 class ManualIndex:
     pages: list[str]
     vectors: np.ndarray  # one L2-normalized row per page
+    term_counts: list[Counter] = field(init=False)
+    doc_lens: np.ndarray = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.term_counts = [Counter(_tokens(p)) for p in self.pages]
+        self.doc_lens = np.array([sum(c.values()) for c in self.term_counts], dtype=np.float32)
+
+    def bm25(self, query: str, k1: float = 1.5, b: float = 0.75) -> np.ndarray:
+        n = len(self.pages)
+        norm = k1 * (1 - b + b * self.doc_lens / max(self.doc_lens.mean(), 1.0))
+        scores = np.zeros(n, dtype=np.float32)
+        for term in set(_tokens(query)):
+            tf = np.array([c.get(term, 0) for c in self.term_counts], dtype=np.float32)
+            df = int((tf > 0).sum())
+            if df:
+                idf = math.log(1 + (n - df + 0.5) / (df + 0.5))
+                scores += idf * tf * (k1 + 1) / (tf + norm)
+        return scores
 
 
 def _embed(client: genai.Client, texts: list[str], task_type: str) -> np.ndarray:
@@ -86,10 +117,18 @@ def build_index(client: genai.Client) -> ManualIndex:
 
 
 def retrieve(client: genai.Client, index: ManualIndex, query: str) -> list[int]:
-    """Return 0-based indices of the most relevant pages, in page order."""
+    """Return 0-based indices of the most relevant pages (semantic + keyword, rank-fused), in page order."""
+    n = len(index.pages)
+    fused = np.zeros(n, dtype=np.float32)
+
     q = _embed(client, [query], "RETRIEVAL_QUERY")[0]
-    top = np.argsort(-(index.vectors @ q))[:TOP_K]
-    return sorted(int(i) for i in top)
+    fused[np.argsort(-(index.vectors @ q))] += 1 / (60 + np.arange(n))
+
+    kw = index.bm25(query)
+    kw_ranked = [i for i in np.argsort(-kw) if kw[i] > 0]
+    fused[kw_ranked] += 1 / (60 + np.arange(len(kw_ranked)))
+
+    return sorted(int(i) for i in np.argsort(-fused)[:TOP_K])
 
 
 def ask(
@@ -113,6 +152,7 @@ def ask(
     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=prompt)]))
 
     for i, model in enumerate(models):
+        is_last = i == len(models) - 1
         yielded = False
         try:
             stream = client.models.generate_content_stream(
@@ -122,6 +162,10 @@ def ask(
                     system_instruction=SYSTEM_PROMPT,
                     temperature=0.2,
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                    # Skip retries on all but the last model so a busy model fails over quickly.
+                    http_options=None if is_last else types.HttpOptions(
+                        timeout=60_000, retry_options=types.HttpRetryOptions(attempts=1)
+                    ),
                 ),
             )
             for chunk in stream:
@@ -130,8 +174,8 @@ def ask(
                     yield chunk.text
             return
         except errors.APIError as e:
-            if yielded or e.code not in (429, 503) or i == len(models) - 1:
+            if yielded or e.code not in (429, 503) or is_last:
                 raise
         except httpx.TimeoutException:
-            if yielded or i == len(models) - 1:
+            if yielded or is_last:
                 raise
