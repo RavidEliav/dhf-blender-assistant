@@ -37,3 +37,11 @@ Back to [[Index]]
 - **Sanitize API key and show clear invalid-key message** (by Ravid Eliav)
 - Files changed:
   - app.py
+
+## 2026-10-06 15:14:27 - bde4943
+- **Add Obsidian docs vault, README, and gitignore for Obsidian state** (by Ravid Eliav)
+- Files changed:
+  - .gitignore
+  - Docs/ (vault: Index, Architecture, Retrieval Pipeline, Models and Fallback, Setup and Usage, Deployment, Troubleshooting, Test Results, Decisions, Commit Log, .obsidian settings)
+  - README.md
+  - app.py
