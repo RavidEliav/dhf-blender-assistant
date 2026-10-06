@@ -164,7 +164,7 @@ def ask(
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                     # Skip retries on all but the last model so a busy model fails over quickly.
                     http_options=None if is_last else types.HttpOptions(
-                        timeout=60_000, retry_options=types.HttpRetryOptions(attempts=1)
+                        timeout=30_000, retry_options=types.HttpRetryOptions(attempts=1)
                     ),
                 ),
             )
