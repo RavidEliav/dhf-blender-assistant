@@ -65,6 +65,7 @@ def show_api_error(e: errors.APIError) -> None:
     else:
         st.error(f"Gemini error: {e.message or e}")
 
+
 with st.sidebar:
     st.header("📘 Manual")
     st.write(f"**{MANUAL_PATH.stem}**")
